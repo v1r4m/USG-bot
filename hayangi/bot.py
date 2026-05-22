@@ -42,24 +42,36 @@ class HayangiBot(commands.Bot):
         await self._sync_commands()
 
     async def _sync_commands(self) -> None:
-        """슬래시 커맨드를 디스코드에 동기화합니다."""
+        """슬래시 커맨드를 디스코드에 동기화합니다.
+
+        길드 동기화에 실패하더라도 봇은 계속 실행되며 전역 동기화로 대체합니다.
+        """
         if self.settings.guild_id is not None:
             guild = discord.Object(id=self.settings.guild_id)
             # 전역 커맨드를 개발 길드로 복사해 즉시 반영합니다.
             self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            log.info(
-                "길드(%s)에 슬래시 커맨드 %d개 동기화 완료",
-                self.settings.guild_id,
-                len(synced),
-            )
-        else:
-            synced = await self.tree.sync()
-            log.info(
-                "전역 슬래시 커맨드 %d개 동기화 완료 "
-                "(모든 서버 반영까지 최대 1시간 소요)",
-                len(synced),
-            )
+            try:
+                synced = await self.tree.sync(guild=guild)
+            except discord.Forbidden:
+                log.error(
+                    "길드(%s) 커맨드 동기화 실패 (Missing Access) — 봇이 해당 "
+                    "서버에 없거나 'applications.commands' 범위로 초대되지 "
+                    "않았을 수 있어요. 전역 동기화로 대체합니다.",
+                    self.settings.guild_id,
+                )
+            else:
+                log.info(
+                    "길드(%s)에 슬래시 커맨드 %d개 동기화 완료",
+                    self.settings.guild_id,
+                    len(synced),
+                )
+                return
+
+        synced = await self.tree.sync()
+        log.info(
+            "전역 슬래시 커맨드 %d개 동기화 완료 (모든 서버 반영까지 최대 1시간 소요)",
+            len(synced),
+        )
 
     async def on_ready(self) -> None:
         log.info(
@@ -67,6 +79,11 @@ class HayangiBot(commands.Bot):
             self.user,
             getattr(self.user, "id", "?"),
         )
+        if self.guilds:
+            for guild in self.guilds:
+                log.info("참여 중인 서버: %s (ID: %s)", guild.name, guild.id)
+        else:
+            log.warning("참여 중인 서버가 없습니다 — 봇을 서버에 초대했는지 확인하세요.")
         log.info("하양이 준비 완료 ~_~")
 
     async def on_app_command_error(
