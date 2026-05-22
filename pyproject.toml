@@ -1,0 +1,9 @@
+# 하양이 — 패키지 메타데이터는 requirements.txt 를 기준으로 관리하며,
+# 이 파일은 개발 도구(ruff) 설정 용도로 사용합니다.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
