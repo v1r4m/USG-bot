@@ -20,9 +20,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import discord
+from discord import app_commands
 
 #: 보관된 CTF 카테고리 이름 앞에 붙는 접두사.
 ARCHIVE_PREFIX = "🗄️ "
@@ -96,3 +98,24 @@ def find_ctf(guild: discord.Guild, name: str) -> CTFInfo | None:
         if info.name.casefold() == target:
             return info
     return None
+
+
+def ctf_choices(
+    guild: discord.Guild | None,
+    current: str,
+    predicate: Callable[[CTFInfo], bool],
+) -> list[app_commands.Choice[str]]:
+    """슬래시 커맨드 자동완성용 CTF 후보 목록 (최대 25개)."""
+    if guild is None:
+        return []
+
+    current_cf = current.casefold()
+    choices: list[app_commands.Choice[str]] = []
+    for info in list_ctfs(guild):
+        if not predicate(info):
+            continue
+        if current_cf and current_cf not in info.name.casefold():
+            continue
+        label = f"{ARCHIVE_PREFIX}{info.name}" if info.archived else info.name
+        choices.append(app_commands.Choice(name=label[:100], value=info.name))
+    return choices[:25]

@@ -13,7 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY hayangi ./hayangi
 
 # 보안을 위해 비루트 사용자로 실행합니다.
-RUN useradd --create-home --uid 1000 hayangi
+RUN useradd --create-home --uid 1000 hayangi \
+    && mkdir -p /app/data \
+    && chown hayangi:hayangi /app/data
 USER hayangi
 
 CMD ["python", "-m", "hayangi"]

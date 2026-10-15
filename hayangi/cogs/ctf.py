@@ -2,6 +2,9 @@
 
 명령어: ``/ctf create · join · leave · list · archive · unarchive · delete``
 
+``/ctf create`` 에 ``url`` · ``token`` 을 함께 주면 :mod:`hayangi.cogs.ctfd` 를 통해
+CTFd 와 바로 연동합니다.
+
 상태는 별도 DB 없이 Discord 자체에서 추론합니다. 자세한 규칙은
 :mod:`hayangi.ctf` 모듈 문서를 참고하세요.
 """
@@ -17,9 +20,11 @@ from discord import app_commands
 from discord.ext import commands
 
 from hayangi import ctf as ctflib
+from hayangi.ctfd import CTFdError
 
 if TYPE_CHECKING:
     from hayangi.bot import HayangiBot
+    from hayangi.cogs.ctfd import CTFdSync
 
 log = logging.getLogger(__name__)
 
@@ -90,20 +95,7 @@ class CTF(commands.Cog):
         predicate: Callable[[ctflib.CTFInfo], bool],
     ) -> list[app_commands.Choice[str]]:
         """자동완성용 CTF 후보 목록을 만듭니다."""
-        guild = interaction.guild
-        if guild is None:
-            return []
-
-        current_cf = current.casefold()
-        choices: list[app_commands.Choice[str]] = []
-        for info in ctflib.list_ctfs(guild):
-            if not predicate(info):
-                continue
-            if current_cf and current_cf not in info.name.casefold():
-                continue
-            label = f"🗄️ {info.name}" if info.archived else info.name
-            choices.append(app_commands.Choice(name=label[:100], value=info.name))
-        return choices[:25]
+        return ctflib.ctf_choices(interaction.guild, current, predicate)
 
     def _validate_new_name(self, guild: discord.Guild, name: str) -> str | None:
         """새 CTF 이름을 검사해 문제가 있으면 오류 메시지를, 없으면 ``None`` 을 반환."""
@@ -158,14 +150,26 @@ class CTF(commands.Cog):
         name="create",
         description="새 CTF 대회를 만듭니다 (카테고리·채널·전용 역할 자동 생성).",
     )
-    @app_commands.describe(name="CTF 대회 이름")
+    @app_commands.describe(
+        name="CTF 대회 이름",
+        url="(선택) CTFd 대회 주소 — 지정하면 문제를 자동으로 가져옵니다",
+        token="(선택) CTFd API 토큰 또는 session 쿠키 값",
+    )
     @app_commands.checks.has_permissions(manage_channels=True, manage_roles=True)
-    async def create(self, interaction: discord.Interaction, name: str) -> None:
+    async def create(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        url: str | None = None,
+        token: str | None = None,
+    ) -> None:
         guild = interaction.guild
         assert guild is not None  # guild_only 그룹
 
         name = " ".join(name.split())  # 앞뒤·중복 공백 정리
         error = self._validate_new_name(guild, name)
+        if error is None and bool(url) != bool(token):
+            error = "❌ CTFd 연동에는 `url` 과 `token` 이 둘 다 필요해요."
         if error is not None:
             await interaction.response.send_message(error, ephemeral=True)
             return
@@ -186,7 +190,11 @@ class CTF(commands.Cog):
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 role: discord.PermissionOverwrite(view_channel=True),
                 guild.me: discord.PermissionOverwrite(
-                    view_channel=True, send_messages=True
+                    view_channel=True,
+                    send_messages=True,
+                    create_public_threads=True,
+                    send_messages_in_threads=True,
+                    manage_threads=True,
                 ),
             }
             category = await guild.create_category(
@@ -232,8 +240,25 @@ class CTF(commands.Cog):
             value=" ".join(channel.mention for channel in channels),
             inline=False,
         )
-        result.set_footer(text="참가: /ctf join · 보관: /ctf archive")
+        result.set_footer(text="참가: /ctf join · 문제 추가: /chal add · 보관: /ctf archive")
+
+        if url and token:
+            result.add_field(name="CTFd", value=await self._link_ctfd(category, url, token))
+
         await interaction.followup.send(embed=result)
+
+    async def _link_ctfd(self, category: discord.CategoryChannel, url: str, token: str) -> str:
+        """새 CTF 를 CTFd 와 연동하고 결과 요약 문구를 돌려줍니다."""
+        # 확장은 load_extension 이 모듈을 따로 불러오므로 클래스 대신 코그 이름으로 찾습니다.
+        cog: CTFdSync | None = self.bot.get_cog("CTFd")  # type: ignore[assignment]
+        info = ctflib.resolve_ctf(category)
+        if cog is None or info is None:
+            return "⚠️ CTFd 연동 기능을 불러오지 못했어요. `/ctfd link` 로 다시 시도해 주세요."
+        try:
+            synced = await cog.link(info, url, token)
+        except CTFdError as exc:
+            return f"⚠️ 연동 실패: {exc}\n`/ctfd link` 로 다시 시도할 수 있어요."
+        return f"🔗 연동 완료 — 문제 {len(synced.created)}개를 가져왔어요."
 
     # ------------------------------------------------------------------
     # /ctf join
@@ -485,6 +510,7 @@ class CTF(commands.Cog):
             await channel.delete(reason=reason)
         await info.category.delete(reason=reason)
         await info.role.delete(reason=reason)
+        self.bot.store.remove(info.category.id)
         log.info("CTF 삭제: '%s' (요청자: %s)", info.name, interaction.user)
 
         try:

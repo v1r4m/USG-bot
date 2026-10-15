@@ -18,6 +18,8 @@ class Settings:
     token: str
     guild_id: int | None
     log_level: str
+    data_dir: str
+    ctfd_poll_minutes: int
 
     @classmethod
     def load(cls) -> Settings:
@@ -43,4 +45,18 @@ class Settings:
 
         log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
 
-        return cls(token=token, guild_id=guild_id, log_level=log_level)
+        data_dir = os.getenv("DATA_DIR", "").strip() or "data"
+
+        poll_raw = os.getenv("CTFD_POLL_MINUTES", "").strip() or "5"
+        if not poll_raw.isdigit() or int(poll_raw) < 1:
+            raise RuntimeError(
+                f"CTFD_POLL_MINUTES 값이 올바르지 않습니다: {poll_raw!r} (1 이상의 정수)."
+            )
+
+        return cls(
+            token=token,
+            guild_id=guild_id,
+            log_level=log_level,
+            data_dir=data_dir,
+            ctfd_poll_minutes=int(poll_raw),
+        )

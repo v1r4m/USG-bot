@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from hayangi.config import Settings
+from hayangi.store import LinkStore
 
 log = logging.getLogger(__name__)
 
@@ -16,6 +19,8 @@ log = logging.getLogger(__name__)
 INITIAL_EXTENSIONS: tuple[str, ...] = (
     "hayangi.cogs.general",
     "hayangi.cogs.ctf",
+    "hayangi.cogs.chal",
+    "hayangi.cogs.ctfd",
 )
 
 
@@ -24,6 +29,9 @@ class HayangiBot(commands.Bot):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.store = LinkStore(Path(settings.data_dir) / "ctfd.json")
+        #: CTFd 등 외부 HTTP 요청용 세션 (setup_hook 에서 생성).
+        self.web: aiohttp.ClientSession
         super().__init__(
             # 슬래시 커맨드만 사용하므로 접두사 명령은 멘션으로만 받습니다.
             command_prefix=commands.when_mentioned,
@@ -33,6 +41,8 @@ class HayangiBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         """봇이 로그인한 직후, 게이트웨이 연결 전에 한 번 호출됩니다."""
+        # 대회마다 인증 정보가 다르므로 쿠키를 세션에 쌓아 두지 않습니다.
+        self.web = aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar())
         self.tree.error(self.on_app_command_error)
 
         for extension in INITIAL_EXTENSIONS:
@@ -72,6 +82,11 @@ class HayangiBot(commands.Bot):
             "전역 슬래시 커맨드 %d개 동기화 완료 (모든 서버 반영까지 최대 1시간 소요)",
             len(synced),
         )
+
+    async def close(self) -> None:
+        await super().close()
+        if hasattr(self, "web"):
+            await self.web.close()
 
     async def on_ready(self) -> None:
         log.info(
